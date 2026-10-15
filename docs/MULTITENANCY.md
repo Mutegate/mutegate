@@ -319,7 +319,7 @@ Staying **instance-level** (environment, operator's business): `DATABASE_URL`,
 
 ---
 
-## 8. Landing page and routing
+## 8. Routing
 
 One SPA, three kinds of visitor. On load it asks one question — `GET
 /api/auth/me` — and the answer decides what it shows:
@@ -327,7 +327,7 @@ One SPA, three kinds of visitor. On load it asks one question — `GET
 | Answer | Who | What they see |
 |--------|-----|---------------|
 | `200` | signed in | the console, in the organization on their session |
-| `401` | a visitor | the landing page, sign-in, invitations |
+| `401` | a visitor | sign-in, sign-up where it is open, invitations |
 | `503` | an installation without a database, so without accounts | the console as it always was, with the admin key typed into Settings |
 
 The third keeps `docker run` working exactly as before: accounts only exist
@@ -337,7 +337,9 @@ where there is somewhere to keep them.
   `useSyncExternalStore` over `popstate`). `react-router` is not added: the
   project's dependencies are `react` and `react-dom`, and there are a dozen
   routes and no nested layouts.
-- Routes: `/` (landing), `/login`, `/invite/{token}`, `/app/{screen}`.
+- Routes: `/` (sign-in for a visitor, the console for anyone signed in),
+  `/login`, `/invite/{token}`, `/app/{screen}`. An installation has no
+  landing page: what Mutegate is lives on the project's own site.
   There is no `/register`: registration is by invitation, so the invitation
   page *is* the registration page, and it knows who it is for. OAuth adds
   `/oauth/{provider}/callback` with slice 6.
@@ -348,7 +350,7 @@ where there is somewhere to keep them.
   registration form for a new address, sign-in-and-join for an existing
   account, one-click join for the right person already signed in, and "this
   is for someone else" for the wrong one.
-- The server serves no data without a session — the landing page is not what
+- The server serves no data without a session — the sign-in page is not what
   stands between a stranger and the data. `/app/*` without a session gets the
   same SPA, the API answers `401`, and the SPA sends them to
   `/login?next=…` and back afterwards.

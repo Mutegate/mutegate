@@ -204,7 +204,7 @@ To let people sign up on their own, set
 REGISTRATION_OPEN=true
 ```
 
-The landing and sign-in pages then offer **Sign up**: an address, a password
+The sign-in page then offers **Sign up**: an address, a password
 and the password again. Each new account gets an organization of its own,
 named after the address, with its owner signed straight in. Invitations keep
 working alongside it. There is no confirmation mail, so an address is taken

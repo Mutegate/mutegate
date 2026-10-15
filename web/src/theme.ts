@@ -1,4 +1,4 @@
-// The light/dark choice, shared by the landing page, the sign-in pages and the
+// The light/dark choice, shared by the guides, the sign-in pages and the
 // console, so moving between them never flips the theme under somebody.
 import { useCallback, useState } from 'react'
 
