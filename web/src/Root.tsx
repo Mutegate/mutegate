@@ -2,7 +2,7 @@
 //
 // One question on load — GET /api/auth/me — decides everything:
 //   200  signed in: the console, in the organization on their session;
-//   401  a visitor: the landing page, sign-in, invitations;
+//   401  a visitor: sign-in, sign-up where it is open, invitations;
 //   503  an installation without a database, so without accounts: the console
 //        as it always was, authenticated with the admin key from Settings.
 // The third keeps a `docker run` quickstart working exactly as before; accounts
@@ -12,7 +12,6 @@ import { auth, ApiError, setAuthMode, setUnauthorizedHandler } from './api'
 import type { Me } from './api'
 import { match, navigate, useLocation } from './router'
 import { useTheme } from './theme'
-import { Landing } from './pages/Landing'
 import { Invite, Login, Signup } from './pages/Auth'
 import { Connect } from './pages/Connect'
 import { Console } from './console/Console'
@@ -144,14 +143,15 @@ export function Root() {
   const invite = match('/invite/:token', path)
 
   if (boot.state === 'visitor') {
-    if (path === '/') return <Landing theme={theme} toggleTheme={toggleTheme} />
+    // An installation is somebody's own gateway, not a shop window: the way
+    // in is the sign-in page. What Mutegate is lives on the project's site.
     if (path === '/login') return <Login theme={theme} query={query} onSignedIn={signedIn} />
     if (path === '/signup') return <Signup theme={theme} onSignedIn={signedIn} />
     if (invite) {
       return <Invite theme={theme} token={invite.token} query={query} me={null} onSignedIn={signedIn} onSignOut={() => signOut()} />
     }
     if (path.startsWith('/app')) return <Redirect to={`/login?next=${encodeURIComponent(path)}`} />
-    return <Redirect to="/" />
+    return <Redirect to="/login" />
   }
 
   // Signed in.
