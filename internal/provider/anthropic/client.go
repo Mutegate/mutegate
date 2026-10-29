@@ -323,53 +323,45 @@ func (s *chatStream) event(data []byte) {
 
 // ── Native Messages API passthrough ───────────────────────────────────────────
 
-// PassthroughHeaders are client headers forwarded verbatim to Anthropic.
-// Empty fields fall back to the default API version.
-type PassthroughHeaders struct {
-	Version string // anthropic-version
-	Beta    string // anthropic-beta
-}
-
-// Messages proxies a native Anthropic Messages API request without any
-// translation: the body goes upstream as-is (after DLP scanning by the caller)
-// and the response — including SSE streams — is returned untouched. Caller
-// must close the returned ReadCloser.
-func (c *Client) Messages(ctx context.Context, body io.Reader, contentType string, hdr PassthroughHeaders) (io.ReadCloser, string, int, error) {
-	buf, err := io.ReadAll(body)
+// Forward sends a native Messages API request — /v1/messages or
+// /v1/messages/count_tokens — upstream as it came, with the provider's key in
+// place of the caller's. Every anthropic-* header goes along with all of its
+// values: Claude Code sends several anthropic-beta headers, and a body field
+// whose beta header was dropped is a 400. The query (Claude Code's ?beta=true)
+// is kept too. The caller closes the response body.
+func (c *Client) Forward(ctx context.Context, path, rawQuery string, body []byte, in http.Header) (*http.Response, error) {
+	url := c.baseURL + path
+	if rawQuery != "" {
+		url += "?" + rawQuery
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return nil, "", 0, fmt.Errorf("read body: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
+	req.ContentLength = int64(len(body))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/messages", bytes.NewReader(buf))
-	if err != nil {
-		return nil, "", 0, fmt.Errorf("create request: %w", err)
+	for name, values := range in {
+		if strings.HasPrefix(strings.ToLower(name), "anthropic-") {
+			for _, v := range values {
+				req.Header.Add(name, v)
+			}
+		}
 	}
-	req.ContentLength = int64(len(buf))
-
-	req.Header.Set("x-api-key", c.apiKey)
-	version := hdr.Version
-	if version == "" {
-		version = anthropicVersion
+	if req.Header.Get("anthropic-version") == "" {
+		req.Header.Set("anthropic-version", anthropicVersion)
 	}
-	req.Header.Set("anthropic-version", version)
-	if hdr.Beta != "" {
-		req.Header.Set("anthropic-beta", hdr.Beta)
-	}
+	contentType := in.Get("Content-Type")
 	if contentType == "" {
 		contentType = "application/json"
 	}
 	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("x-api-key", c.apiKey)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, "", 0, fmt.Errorf("request: %w", err)
+		return nil, fmt.Errorf("request: %w", err)
 	}
-
-	ct := resp.Header.Get("Content-Type")
-	if ct == "" {
-		ct = "application/json"
-	}
-	return resp.Body, ct, resp.StatusCode, nil
+	return resp, nil
 }
 
 // WithHTTPClient sends this client's requests through hc — a provider's own

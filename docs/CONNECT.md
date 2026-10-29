@@ -51,7 +51,7 @@ Or for good — `~/.claude/settings.json`:
 - ANTHROPIC_AUTH_TOKEN is sent as a Bearer token and needs no approval; ANTHROPIC_API_KEY works too, as x-api-key, and asks once.
 - Keep the key in ~/.claude/settings.json or .claude/settings.local.json, never in the .claude/settings.json a repository commits. In the VS Code extension the same variables go in claudeCode.environmentVariables.
 - A blocked request shows as "API Error: 403 request blocked by DLP policy: sensitive data detected (…)". Claude Code puts "Failed to authenticate" in front of it; the rule named at the end is the real reason.
-- Token counting (/v1/messages/count_tokens) is not served. Claude Code falls back to an estimate, so /context shows approximate numbers; nothing else changes.
+- Token counting (/v1/messages/count_tokens) goes through the gateway and is scanned like a message, so /context shows exact numbers.
 - With the Mutegate CLI (github.com/Mutegate/cli): mutegate login, then mutegate run -- claude. Nothing is written anywhere, and every run is its own session on incidents and costs.
 
 [Claude Code documentation](https://code.claude.com/docs/en/llm-gateway-connect)
@@ -355,7 +355,7 @@ message = client.messages.create(
 print(message.content[0].text)
 ```
 
-- messages.create works, streaming and tools included. Token counting, batches, files and models.list are not served.
+- messages.create and messages.count_tokens work, streaming and tools included. Batches, files and models.list are not served.
 
 [Anthropic Python documentation](https://platform.claude.com/docs/en/api/sdks/python)
 
@@ -389,7 +389,7 @@ const message = await client.messages.create({
 })
 ```
 
-- messages.create works, streaming and tools included. Token counting, batches, files and models.list are not served.
+- messages.create and messages.count_tokens work, streaming and tools included. Batches, files and models.list are not served.
 
 [Anthropic TypeScript documentation](https://platform.claude.com/docs/en/api/sdks/typescript)
 
@@ -419,7 +419,7 @@ claude = ChatAnthropic(
 )
 ```
 
-- OpenAIEmbeddings and ChatAnthropic's token counting are not served yet.
+- OpenAIEmbeddings is not served yet; ChatAnthropic's token counting works.
 
 [LangChain documentation](https://docs.langchain.com/oss/python/integrations/chat/openai)
 

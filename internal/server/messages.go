@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -40,31 +39,43 @@ func writeAnthropicError(w http.ResponseWriter, status int, errType, message str
 	json.NewEncoder(w).Encode(payload)
 }
 
-// handleMessages proxies the native Anthropic Messages API (POST /v1/messages)
-// with DLP scanning, so agents that speak Anthropic natively — Claude Code
-// among them — can be protected by pointing ANTHROPIC_BASE_URL at Mutegate.
-func (h *Handlers) handleMessages(w http.ResponseWriter, r *http.Request) {
+// anthropicRequest is a native Messages API call that has been
+// authenticated and scanned: what is left is to send it.
+type anthropicRequest struct {
+	key    *storage.Key
+	meta   reqMeta
+	policy inspector.Policy
+	model  string
+	stream bool
+	body   []byte
+}
+
+// acceptAnthropic does what /v1/messages and /v1/messages/count_tokens share:
+// the caller's key, its limits when asked to, and DLP on everything the body
+// would carry to Anthropic. It answers the client itself and returns false
+// when the request goes no further.
+func (h *Handlers) acceptAnthropic(w http.ResponseWriter, r *http.Request, limits bool) (*anthropicRequest, bool) {
 	token := extractClientToken(r)
 	if token == "" {
 		writeAnthropicError(w, http.StatusUnauthorized, "authentication_error",
 			"missing API key: send it as 'x-api-key' or 'Authorization: Bearer'", nil)
-		return
+		return nil, false
 	}
 	key, err := h.KeyStore.GetByMutegateKey(r.Context(), token)
 	if err != nil {
 		if err == storage.ErrKeyNotFound {
 			writeAnthropicError(w, http.StatusUnauthorized, "authentication_error", "invalid API key", nil)
-			return
+			return nil, false
 		}
 		h.Logger.Error("key lookup failed", "err", err)
 		writeAnthropicError(w, http.StatusInternalServerError, "api_error", "internal error", nil)
-		return
+		return nil, false
 	}
 
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "failed to read body", nil)
-		return
+		return nil, false
 	}
 
 	var peek struct {
@@ -80,8 +91,8 @@ func (h *Handlers) handleMessages(w http.ResponseWriter, r *http.Request) {
 	meta := h.metaFor(r, key.OrgID, key.ID, model)
 	// The native Messages API only ever speaks to Anthropic.
 	meta.provider = string(storage.KindAnthropic)
-	if !h.enforceLimits(w, r, meta) {
-		return
+	if limits && !h.enforceLimits(w, r, meta) {
+		return nil, false
 	}
 
 	// DLP: scan outbound content before anything leaves the network.
@@ -96,30 +107,71 @@ func (h *Handlers) handleMessages(w http.ResponseWriter, r *http.Request) {
 			writeAnthropicError(w, http.StatusForbidden, "permission_error",
 				"request blocked by DLP policy: sensitive data detected ("+strings.Join(rules, ", ")+")",
 				map[string]any{"mutegate": map[string]any{"blocked_by": "dlp", "rules": rules}})
-			return
+			return nil, false
 		}
 		bodyBytes = res.Body
 	}
+	return &anthropicRequest{key: key, meta: meta, policy: policy, model: model, stream: peek.Stream, body: bodyBytes}, true
+}
 
-	up, err := h.upstreamFor(r.Context(), key, model, storage.KindAnthropic)
+// forwardAnthropic sends an accepted request to the key's Anthropic upstream.
+// When it returns no response it has answered the client already; proxyErr
+// is then set if Anthropic could not be reached, as opposed to the key having
+// no Anthropic provider at all.
+func (h *Handlers) forwardAnthropic(w http.ResponseWriter, r *http.Request, req *anthropicRequest, path string) (resp *http.Response, proxyErr error) {
+	up, err := h.upstreamFor(r.Context(), req.key, req.model, storage.KindAnthropic)
 	if err != nil {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error",
 			upstreamErrorText("anthropic", err), nil)
-		return
+		return nil, nil
 	}
-	client := anthropic.New(up.BaseURL, up.APIKey).WithHTTPClient(up.Client)
-	start := time.Now()
-	upstream, respCT, status, err := client.Messages(r.Context(), bytes.NewReader(bodyBytes),
-		r.Header.Get("Content-Type"), anthropic.PassthroughHeaders{
-			Version: r.Header.Get("anthropic-version"),
-			Beta:    r.Header.Get("anthropic-beta"),
-		})
+	resp, err = anthropic.New(up.BaseURL, up.APIKey).WithHTTPClient(up.Client).
+		Forward(r.Context(), path, r.URL.RawQuery, req.body, r.Header)
 	if err != nil {
-		h.recordUsage(meta, pricing.Usage{}, http.StatusBadGateway, time.Since(start), err.Error())
 		writeAnthropicError(w, http.StatusBadGateway, "api_error", "failed to proxy request", nil)
+		return nil, err
+	}
+	return resp, nil
+}
+
+// copyAgentHeaders passes on the response headers an agent acts on: when to
+// retry and whether to, its rate limits, and the request id support asks for.
+// Claude Code reads all of them; the rest of the upstream's headers stay here.
+func copyAgentHeaders(dst, src http.Header) {
+	for name, values := range src {
+		n := strings.ToLower(name)
+		if n == "retry-after" || n == "x-should-retry" || n == "request-id" ||
+			strings.HasPrefix(n, "anthropic-ratelimit-") {
+			dst[name] = append([]string(nil), values...)
+		}
+	}
+}
+
+// handleMessages proxies the native Anthropic Messages API (POST /v1/messages)
+// with DLP scanning, so agents that speak Anthropic natively — Claude Code
+// among them — can be protected by pointing ANTHROPIC_BASE_URL at Mutegate.
+func (h *Handlers) handleMessages(w http.ResponseWriter, r *http.Request) {
+	req, ok := h.acceptAnthropic(w, r, true)
+	if !ok {
 		return
 	}
-	defer upstream.Close()
+	meta, policy := req.meta, req.policy
+
+	start := time.Now()
+	resp, proxyErr := h.forwardAnthropic(w, r, req, "/v1/messages")
+	if resp == nil {
+		if proxyErr != nil {
+			h.recordUsage(meta, pricing.Usage{}, http.StatusBadGateway, time.Since(start), proxyErr.Error())
+		}
+		return
+	}
+	defer resp.Body.Close()
+	upstream, status := resp.Body, resp.StatusCode
+	respCT := resp.Header.Get("Content-Type")
+	if respCT == "" {
+		respCT = "application/json"
+	}
+	copyAgentHeaders(w.Header(), resp.Header)
 
 	rs := h.newRespScanner(meta, policy)
 
@@ -141,7 +193,9 @@ func (h *Handlers) handleMessages(w http.ResponseWriter, r *http.Request) {
 		errStr = readErr.Error()
 	}
 
-	if rs != nil {
+	// An upstream error goes back word for word: Claude Code decides whether
+	// and how to retry by reading it.
+	if rs != nil && status < http.StatusBadRequest {
 		res := h.inspect(r.Context()).ScanMessagesResponse(data, policy)
 		h.noteNER(res.NERError)
 		h.recordFindings(r.Context(), meta, res.Findings, "", storage.DirectionResponse)
@@ -162,6 +216,31 @@ func (h *Handlers) handleMessages(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(status)
 	w.Write(data)
 	h.recordUsage(meta, usage, status, time.Since(start), errStr)
+}
+
+// handleCountTokens serves POST /v1/messages/count_tokens, which Claude Code
+// calls for exact context sizes. Counting sends the whole conversation to
+// Anthropic, so it is scanned like a message: a secret is blocked here too.
+// It costs nothing and is not a model call, so no budget or rate limit is
+// spent on it and no usage is recorded.
+func (h *Handlers) handleCountTokens(w http.ResponseWriter, r *http.Request) {
+	req, ok := h.acceptAnthropic(w, r, false)
+	if !ok {
+		return
+	}
+	resp, _ := h.forwardAnthropic(w, r, req, "/v1/messages/count_tokens")
+	if resp == nil {
+		return
+	}
+	defer resp.Body.Close()
+	copyAgentHeaders(w.Header(), resp.Header)
+	ct := resp.Header.Get("Content-Type")
+	if ct == "" {
+		ct = "application/json"
+	}
+	w.Header().Set("Content-Type", ct)
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
 
 // blockedRules lists the distinct rules whose verdict was block.

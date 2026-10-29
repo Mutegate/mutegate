@@ -162,6 +162,7 @@ func Routes(o Options) http.Handler {
 	// Native Anthropic Messages API — lets Claude Code and other Anthropic
 	// clients be proxied by pointing ANTHROPIC_BASE_URL here.
 	mux.HandleFunc("POST /v1/messages", h.handleMessages)
+	mux.HandleFunc("POST /v1/messages/count_tokens", h.handleCountTokens)
 	// OpenAI Responses API — what Codex-style agents speak.
 	mux.HandleFunc("POST /v1/responses", h.handleResponses)
 	// Jev decision API: business fields in, a typed decision out. Same paths
