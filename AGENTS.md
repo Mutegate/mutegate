@@ -1,23 +1,36 @@
-# Mutegate — AI Gateway
+# Mutegate
 
-A single layer between applications and LLM providers (OpenAI, Anthropic, Groq).
+A self-hosted DLP gateway for AI agents. It sits between agents (Claude Code,
+Codex, Cursor, SDK apps) and LLM providers, scans what they send — prompts,
+tool calls, tool results — for secrets and personal data, and blocks, redacts
+or records it before it leaves. Self-hosted only: there is no hosted service.
 
-## Tech stack
+## Layout
 
-- **Go** — the main language
-- **An OpenAI-compatible API** — one entry point
-- Routing, fallback, rate limiting, cost tracking
+- `cmd/mutegate` — the gateway binary
+- `internal/server` — HTTP routes: `/v1/chat/completions`, `/v1/responses`,
+  `/v1/messages`, `/v1/models`, the console's `/api` and `/admin`
+- `internal/inspector` — the DLP engine: detectors, policies, request and
+  response scanning, streaming
+- `internal/provider` — upstream clients (OpenAI, Anthropic with chat
+  translation, Groq, OpenAI-compatible, Jev)
+- `internal/pricing` — the cost catalog, generated from LiteLLM
+  (`go generate ./internal/pricing`)
+- `internal/storage` — Postgres and in-memory stores
+- `web/` — the React console; `ner/` — the optional local NER service
+- `docs/` — user documentation; [`docs/ROADMAP.md`](docs/ROADMAP.md) — what
+  comes next
 
-## Roadmap
+## Working on it
 
-1. **MVP**: a proxy to OpenAI
-2. Add Anthropic and Groq
-3. Route by model
-4. Streaming, tokens, billing
-
-## Context for AI
-
-When working on this project:
-- Use Go 1.21+
-- Follow the Go standards (Effective Go, gofmt)
-- Aim for an OpenAI-compatible API, for uniformity
+- Go 1.26, gofmt, the standard library first; `go test ./...` must pass.
+- Console: `cd web && npm run lint && npm run build`. `docs/CONNECT.md` is
+  generated from `web/src/connect/guides.ts` by `npm run docs:connect`.
+- Forward what the gateway does not need to understand: unknown body fields
+  and `anthropic-*` headers go upstream verbatim. Rewriting a request breaks
+  agents (Claude Code's gateway guide, preserved thinking) — inspect, and
+  rewrite only where a policy says redact.
+- Never store or log raw prompt content or secrets: incidents keep masked
+  samples only.
+- Old names still accepted for compatibility: `APERTURE_*` environment
+  variables, `X-Aperture-*` headers.
