@@ -1,6 +1,7 @@
 # Mutegate — roadmap: the pivot to a self-hosted DLP gateway for AI agents
 
-> Recorded: July 2026.
+> Recorded: July 2026. The road to 1.0 (October 2026) is at the end:
+> [Toward 1.0](#toward-10).
 > Positioning: **a proxy between a team's AI agents and LLM providers that
 > inspects traffic for leaked secrets and PII before it reaches the cloud,
 > keeps an incident log and tracks spend. One Go binary, self-hosted.**
@@ -146,13 +147,14 @@ to their first caught incident in ten minutes. ~3–4 days.
 - Per-key rate limits and budgets; agent and session attribution.
 - Prometheus `/metrics`.
 - An alerts UI and the "what would have been blocked" report.
+- The OpenAI chat API in front of Claude: tools, images, streaming, usage
+  and cost; Claude Code attributed with no setup.
+- Accounts, organizations and roles; OAuth sign-in; connection guides.
 
 ## Backlog (on demand)
 
 - De-redaction: restoring placeholders in the answer for redact mode.
 - More endpoints: `/v1/embeddings`; more providers (Gemini, Bedrock).
-- Full Anthropic compatibility: tools and function calling, multimodal content,
-  usage in non-streaming responses (currently lost, so cost reads as 0).
 - Versioned database migrations (today: `ALTER TABLE ... IF NOT EXISTS`).
 - NER languages beyond EN and RU; NER over streamed responses.
 - SSO/OIDC for the console (enterprise demand).
@@ -168,3 +170,110 @@ M2 (end of week 2): policies + the events API — the product works headless
 M3 (end of week 3): UI + alerts — the complete MVP
 M4 (~day 25):       README, landing, examples — public launch
 ```
+
+---
+
+## Toward 1.0
+
+Recorded October 2026, after a review of what changed in the APIs agents use;
+updated November 2026. Three shifts set the order:
+
+1. **Agents moved to the Responses API.** OpenAI's newest models call tools
+   only through it, and Codex speaks nothing else (plus a WebSocket mode).
+   A Responses request carries diffs, shell output, files inside tool results
+   and MCP calls — far more than Mutegate scans today.
+2. **A gateway must not rewrite what it forwards.** Claude Code's
+   [gateway guide](https://code.claude.com/docs/en/llm-gateway-protocol)
+   says "inspect without modifying", and the newest Claude models reject a
+   request whose `system`, `tools` or earlier messages differ from what
+   produced their thinking
+   ([preserved thinking](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking)) —
+   since November for every account on Fable and Mythos 5.2. OpenAI's
+   GPT-6.2 drops its reasoning after an edited prefix. Redaction has to be
+   deterministic, and replayed history left alone.
+3. **More data leaves without passing the gateway.** Providers call MCP
+   servers, fetch pages and run code themselves; files go up through
+   `/v1/files`. What the gateway does see is the request that asks for it —
+   the `tools` list — so that is where control goes.
+
+### v0.5 — works with every agent, and breaks none
+
+- [ ] Fixes: repeated `anthropic-beta` headers are dropped; a held-back
+      `tool_use` tail is flushed as text; upstream response headers
+      (`retry-after`, `x-should-retry`, rate limits, request id) are lost;
+      no body size limit on `/v1/*`; SSE lines over 64 KiB end the stream;
+      redacted Responses text may still arrive in `output_item.done`.
+- [ ] Pass-through fidelity: every `anthropic-*` header and unknown body field
+      verbatim, upstream error bodies unchanged, `/v1/messages/count_tokens`.
+- [ ] DLP that does not break the conversation: an inspect-only mode (block,
+      never rewrite) as the default for agent traffic; redaction made
+      deterministic and stable across turns; replayed assistant turns and
+      thinking never touched; responses blocked rather than redacted.
+- [ ] The whole Responses API: every input and output item type, walked
+      recursively with a policy for unknown types; every streaming event;
+      `GET /v1/responses/{id}`; a clear refusal of WebSocket mode until it is
+      proxied (Codex: `supports_websockets = false`).
+- [ ] Recursive scanning of every string a request carries — nested tool
+      results, `tool_use` input in history, Anthropic `tools`, documents.
+- [ ] Claude Code attribution beyond the session: subagent, parent and
+      request class.
+- [ ] Codex as it ships: its built-in provider opens a WebSocket by default,
+      so refuse the upgrade at once (or proxy it) and document a custom
+      provider with `supports_websockets = false`; serve `GET /models` in
+      Codex's catalog shape; answer a block with `inference_hook_denied`,
+      which Codex treats as final rather than retrying.
+- [ ] Anthropic API `2026-10-21` and message threads: the key as
+      `Authorization: Bearer`, bodies up to 128 MB, no sampling fields added
+      when translating; a thread keeps its history at Anthropic, so scan and
+      redact the request that creates it, and never switch upstream keys
+      within one.
+- [ ] Claude Code auto mode behind a gateway: the server-side safety check
+      travels in the final `message_delta` — response scanning must leave it
+      and tool_use ids intact. An end-to-end test that drives the real agent.
+- [ ] Cost: cache writes by TTL (billed on OpenAI since GPT-5.6), reasoning
+      tokens, the model in the response rather than the one requested.
+
+### v0.6 — DLP that knows what an agent is
+
+- [ ] Server-side tools and MCP governed through `tools`: allowlists for
+      `server_url` and `mcp_servers`, approvals enforced, tunnels denied;
+      credentials inside those definitions treated as expected, not leaks.
+- [ ] Tool definitions pinned: a changed description or schema ("rug pull")
+      is an incident; descriptions scanned for injected instructions.
+- [ ] Secrets v2: the Betterleaks rule set (MIT, Go), connection strings and
+      cloud credentials; canary tokens that make any sighting an incident.
+- [ ] Coding-agent policies: file paths in Read/Bash results (`.env`,
+      `*.pem`, `secrets/`), a ceiling on how much code leaves per key.
+- [ ] Prompt-injection detection on tool results (a small local model beside
+      NER), alert-only at first.
+- [ ] Skills pinned and scanned like tool definitions: MCP skills (SEP-2640)
+      and Agent Skills carry instructions the model follows.
+- [ ] OIDC sign-in moved up from v0.7: Codex (`gateway_oauth`) and Claude
+      Code now expect to sign in to a gateway themselves.
+
+### v0.7 — MCP, and what a company asks for
+
+- [ ] An MCP DLP proxy (#55): Streamable HTTP, specs 2025-11-25 and
+      2026-07-28 (the next one is due 2027-03-30); arguments and results
+      scanned; tool allowlists; token audience checked, no passthrough, no
+      headers across redirects; the draft files extension governed, since its
+      uploads leave outside the JSON-RPC stream.
+- [ ] IdP groups mapped to policies.
+- [ ] Mutegate as an Anthropic inference hook: allow/deny for claude.ai,
+      Cowork and Claude Code in Enterprise organizations, without a proxy.
+- [ ] OpenTelemetry (GenAI semantic conventions) and an audit stream for a
+      SIEM, with retention of six months or more.
+- [ ] Signed images, an SBOM, and a page mapping Mutegate to the OWASP
+      LLM 2026, Agentic and MCP Top 10s.
+- [ ] Gemini through its OpenAI-compatible layer, then the native API for
+      Gemini CLI; Anthropic-compatible upstreams (DeepSeek, Kimi, MiniMax,
+      OpenRouter, vLLM, Ollama) for `/v1/messages`.
+
+### Not on the road
+
+- Routing across a hundred providers, semantic caching, model marketplaces.
+- Hosting or cataloguing MCP servers.
+- Toxicity and hallucination filters, or an LLM judge.
+- Browser and endpoint DLP.
+- Storing raw prompts; verifying found secrets against their provider by
+  default; proxying realtime audio (blocked, not scanned).
