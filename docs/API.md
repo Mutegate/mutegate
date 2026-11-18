@@ -26,7 +26,8 @@ key only. Roles and isolation are described in
 |-------|------|
 | `POST /v1/chat/completions` | OpenAI-compatible chat, streaming included. Claude models are translated to the Anthropic API and back, tool calls and images included |
 | `POST /v1/responses` | OpenAI Responses API |
-| `POST /v1/messages` | Native Anthropic Messages API — what Claude Code speaks |
+| `POST /v1/messages` | Native Anthropic Messages API — what Claude Code speaks. Every `anthropic-*` header goes upstream as sent; `retry-after`, `x-should-retry`, `request-id` and the rate-limit headers come back |
+| `POST /v1/messages/count_tokens` | Anthropic token counting. Scanned like a message (it sends the whole conversation), but no budget, rate limit or usage row |
 | `POST /api/v1/decisions`, `POST /api/v1/decisions/{preset}` | The [Jev decision API](PROVIDERS.md#the-jev-decision-api) |
 | `GET /v1/models` | Models this key can use, asked live of every provider it has a credential for |
 
